@@ -22,6 +22,9 @@ class JRSKELETALMESHMERGER_API UJrSkeletalMergingLibrary : public UBlueprintFunc
 	GENERATED_BODY()
 public:
 	UFUNCTION(BlueprintCallable, Category = "SkelMerge", meta = (UnsafeDuringActorConstruction = "true"))
+	static void SaveMergeSkeletal(FSkeletalMeshMergeParams& SkeletalMeshMergeParams, FSkeletonMergeParams& SkeletonMergeParams, TArray<USCS_Node*> SkeletalNodes);
+	
+	UFUNCTION(BlueprintCallable, Category = "SkelMerge", meta = (UnsafeDuringActorConstruction = "true"))
 	static bool SaveMergeSkeletons(const FSkeletonMergeParams& mergeParams, TSubclassOf<AActor> ActorClass, const FString& fileName, const FString& AbsolutePath, USkeleton* &ResultMesh);
 
 	UFUNCTION(BlueprintCallable, Category = "SkelMerge", meta = (UnsafeDuringActorConstruction = "true"))
@@ -80,7 +83,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SkelMerge", meta = (UnsafeDuringActorConstruction = "true"))
 	static void BoneNameCheck(TArray<USkeleton*> Skeletons);
 
-    static void MergeSkeletal(FSkeletalMeshMergeParams& SkeletalMeshMergeParams, const FSkeletonMergeParams& SkeletonMergeParams, TArray<USCS_Node*> SkeletalNodes);
+	static void ModifySameBoneName(TArray<TObjectPtr<USkeleton>>& Skeletons);
+
+    static void MergeSkeletal(FSkeletalMeshMergeParams& SkeletalMeshMergeParams, FSkeletonMergeParams& SkeletonMergeParams, TArray<USCS_Node*> SkeletalNodes);
 
 	static USkeleton* MergeSkeletons(const FSkeletonMergeParams& Params, TArray<USCS_Node*> SkeletalNodes);
 

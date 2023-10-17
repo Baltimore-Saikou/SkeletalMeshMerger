@@ -38,7 +38,7 @@
 #include "RawMesh.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(JrSkeletalMergingLibrary)
-
+UE_DISABLE_OPTIMIZATION
 DEFINE_LOG_CATEGORY(LogSkeletalMeshMerge);
 
 namespace UE
@@ -397,6 +397,11 @@ void GenerateImportedModel(USkeletalMesh* SkeletalMesh)
 #endif
 }
 
+void UJrSkeletalMergingLibrary::SaveMergeSkeletal(FSkeletalMeshMergeParams& SkeletalMeshMergeParams, FSkeletonMergeParams& SkeletonMergeParams, TArray<USCS_Node*> SkeletalNodes)
+{
+	MergeSkeletal(SkeletalMeshMergeParams, SkeletonMergeParams, SkeletalNodes);
+}
+
 bool UJrSkeletalMergingLibrary::SaveMergeSkeletons(const FSkeletonMergeParams& mergeParams, TSubclassOf<AActor> ActorClass, const FString& fileName, const FString& AbsolutePath, USkeleton* &ResultMesh)
 {
 	const FString PackagePath = AbsolutePath + fileName;
@@ -643,7 +648,6 @@ void UJrSkeletalMergingLibrary::BoneNameCheck(TArray<USkeleton*> Skeletons)
 	TArray<USkeleton*> SkeletonsCache;
 	for (auto SourceSkeleton : Skeletons)
 	{
-		TArray<FName> SourceAllBoneName;
 		bool bRename = false;
 		TArray<FMeshBoneInfo> CurrentBoneInfo = SourceSkeleton->GetReferenceSkeleton().GetRawRefBoneInfo();
 
@@ -668,6 +672,7 @@ void UJrSkeletalMergingLibrary::BoneNameCheck(TArray<USkeleton*> Skeletons)
 
 		SkeletonsCache.Add(SourceSkeleton);
 
+		// 如果有相同的骨骼名，则保存所有引用该 骨架/骨骼网格体 的资产
 		if (bRename)
 		{
 			IAssetRegistry& AssetRegistry = UAssetManager::Get().GetAssetRegistry();
@@ -737,14 +742,62 @@ void UJrSkeletalMergingLibrary::BoneNameCheck(TArray<USkeleton*> Skeletons)
 	}
 }
 
-void UJrSkeletalMergingLibrary::MergeSkeletal(FSkeletalMeshMergeParams& SkeletalMeshMergeParams, const FSkeletonMergeParams& SkeletonMergeParams, TArray<USCS_Node*> SkeletalNodes)
+void UJrSkeletalMergingLibrary::ModifySameBoneName(TArray<TObjectPtr<USkeleton>>& Skeletons)
 {
-	USkeleton* Skeleton = MergeSkeletons(SkeletonMergeParams, SkeletalNodes);
-	if (SkeletalMeshMergeParams.bSkeletonBefore)
+	TObjectPtr<USkeleton> RootSkeleton = nullptr;
+	for (TObjectPtr<USkeleton>& SourceSkeleton : Skeletons)
 	{
-		SkeletalMeshMergeParams.Skeleton = Skeleton;	
+		if (RootSkeleton)
+		{
+			TArray<FMeshBoneInfo> CurrentBoneInfo = SourceSkeleton->GetReferenceSkeleton().GetRawRefBoneInfo();
+			auto LastBoneInfo = SourceSkeleton->GetReferenceSkeleton().GetRawRefBoneInfo();
+			for (auto& BoneInfo : CurrentBoneInfo)
+			{
+				auto Index = LastBoneInfo.Find(BoneInfo);
+				if (Index != INDEX_NONE)
+				{
+					// 找到同名骨骼
+					BoneInfo.Name = FName(FString(BoneInfo.Name.ToString()).Append("_" + SourceSkeleton->GetName()));
+					BoneInfo.ExportName = BoneInfo.Name.ToString();
+				}
+			}
+		}
+		else
+		{
+			RootSkeleton = SourceSkeleton;
+		}
 	}
-	MergeMeshes(SkeletalMeshMergeParams);
+}
+
+void UJrSkeletalMergingLibrary::MergeSkeletal(FSkeletalMeshMergeParams& SkeletalMeshMergeParams, FSkeletonMergeParams& SkeletonMergeParams, TArray<USCS_Node*> SkeletalNodes)
+{
+	TArray<TObjectPtr<USkeleton>> SkeletonsToMergeCopy = SkeletonMergeParams.SkeletonsToMerge;
+
+	SkeletonsToMergeCopy.RemoveAll([](USkeleton* InSkeleton)
+	{
+		return InSkeleton == nullptr;
+	});
+
+	if (SkeletonsToMergeCopy.Num() <= 1)
+	{
+		UE_LOG(LogSkeletalMeshMerge, Warning, TEXT("Must provide multiple valid Skeletal Meshes in order to perform a merge."));
+		return;
+	}
+
+	TArray<TObjectPtr<USkeleton>> Skelesons;
+	for (auto Skeleton : SkeletonsToMergeCopy)
+	{
+		USkeleton* CopyMesh = DuplicateObject<USkeleton>(Skeleton, nullptr);
+		Skeleton = CopyMesh;
+	}
+
+	ModifySameBoneName(SkeletonsToMergeCopy);
+	// USkeleton* Skeleton = MergeSkeletons(SkeletonMergeParams, SkeletalNodes);
+	// if (SkeletalMeshMergeParams.bSkeletonBefore)
+	// {
+	// 	SkeletalMeshMergeParams.Skeleton = Skeleton;	
+	// }
+	// MergeMeshes(SkeletalMeshMergeParams);
 }
 
 USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams& Params, TArray<USCS_Node*> SkeletalNodes)
@@ -812,6 +865,7 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 
 			// Retrieve parent bone name and respective hash, root-bone is assumed to have a parent hash of 0
 			FName ParentName = Bone.ParentIndex != INDEX_NONE ? Bones[Bone.ParentIndex].Name : NAME_None;
+			ParentName = FName(ParentName.ToString() / FName("1").ToString());
 			uint32 ParentHash = Bone.ParentIndex != INDEX_NONE ? GetTypeHash(ParentName) : 0;
 
 			USCS_Node* BoneNode;
@@ -823,8 +877,9 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 					if (USkeleton* InSkeleton = Cast<USkeletalMeshComponent>(Node->ComponentTemplate)->GetSkeletalMeshAsset()->GetSkeleton(); InSkeleton == Skeleton)
 					{
 						BoneNode = Node;
-						ParentName = Node->AttachToName;
-
+						// ParentName = Node->AttachToName;
+						ParentName = FName(Node->AttachToName.ToString() / "1");
+						
 						if (ParentName.IsNone())
 						{
 							for (USCS_Node* Node1 : SkeletalNodes)
@@ -853,6 +908,9 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 				}
 			}
 			
+			// FName Bone_Name(Bone.Name);
+			FName Bone_Name(Bone.Name.ToString() / "1");
+			
 			// Look-up the path-hash from root to the parent bone
 			const uint32* ParentPath = BoneNamesToPathHash.Find(ParentName);
 			const uint32 ParentPathHash = ParentPath ? *ParentPath : 0;
@@ -863,7 +921,7 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 			if (Params.bCheckSkeletonsCompatibility)
 			{
 				// Check if the bone exists in the hierarchy 
-				if (const uint32* ExistingPath = BoneNamesToPathHash.Find(Bone.Name))
+				if (const uint32* ExistingPath = BoneNamesToPathHash.Find(Bone_Name))
 				{
 					const uint32 ExistingPathHash = *ExistingPath;
 
@@ -876,18 +934,18 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 					}
 
 					// Bone poses will be overwritten, check if they are the same
-					if (!bConflictivePoseFound && !BoneNamesToBonePose[Bone.Name].Equals(BonePoses[BoneIndex]))
+					if (!bConflictivePoseFound && !BoneNamesToBonePose[Bone_Name].Equals(BonePoses[BoneIndex]))
 					{
 						UE_LOG(LogSkeletalMeshMerge, Warning, TEXT("Skeleton %s has a different reference pose, reference pose will be overwritten."), *Skeleton->GetName());
 						bConflictivePoseFound = true;
 					}
 				}
 
-				BoneNamesToBonePose.Add(Bone.Name, BonePoses[BoneIndex]);
+				BoneNamesToBonePose.Add(Bone_Name, BonePoses[BoneIndex]);
 			}
 			
 			// Add path hash to current bone
-			BoneNamesToPathHash.Add(Bone.Name, BonePathHash);
+			BoneNamesToPathHash.Add(Bone_Name, BonePathHash);
 
 			// Add bone to hierarchy
 			FTransform Transform = BonePoses[BoneIndex];
@@ -900,7 +958,7 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 				TArray<FTransform> RefPose = RefSkeleton.GetRawRefBonePose();
 
 				// 网格体资产里骨骼的偏移
-				const uint32 Index = RefSkeleton.FindBoneIndex(Bone.Name);
+				const uint32 Index = RefSkeleton.FindBoneIndex(Bone_Name);
 				if (RefPose.IsValidIndex(Index))
 				{
 					FTransform BoneRelativeTransform = RefPose[Index];
@@ -922,7 +980,7 @@ USkeleton* UJrSkeletalMergingLibrary::MergeSkeletons(const FSkeletonMergeParams&
 				}
 			}
 
-			MergedBoneHierarchy.AddBone(Bone.Name, Transform, BonePathHash);
+			MergedBoneHierarchy.AddBone(Bone_Name, Transform, BonePathHash);
 		}
 
 		if (Params.bCheckSkeletonsCompatibility && bMergeSkeletonsFailed)
@@ -1924,5 +1982,5 @@ void UJrSkeletalMergingLibrary::AddAnimationSlotGroups(USkeleton* InSkeleton, co
 		}
 	}
 }
-
+UE_ENABLE_OPTIMIZATION
 #undef LOCTEXT_NAMESPACE
